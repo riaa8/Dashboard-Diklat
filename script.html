@@ -794,6 +794,7 @@
 
         // Initial Data Load
         if (typeof loadDashboardData === 'function') loadDashboardData();
+        if (typeof loadLaporanYears === 'function') loadLaporanYears();
 
         // Show Dashboard by default
         if (typeof navigateToPage === 'function') navigateToPage('dashboard');
@@ -912,7 +913,10 @@
         if (pageName === 'karyawan') {
             loadKaryawanData();
         } else if (pageName === 'magang') {
-            loadMagangBatches(); // Changed from loadMagangData()
+            loadMagangBatches();
+        } else if (pageName === 'laporan') {
+            if (typeof loadLaporanYears === 'function') loadLaporanYears();
+            if (typeof loadLaporanRekap === 'function') loadLaporanRekap();
         } else if (pageName === 'analytics') {
             loadAnalyticsData();
         } else if (pageName === 'activity') {
@@ -8759,5 +8763,368 @@
         }).getGlobalAnnouncement(currentUser.email);
     }
 
+    /**
+     * ============================================================
+     * LAPORAN SCRIPT (FRONTEND)
+     * ============================================================
+     * File ini berisi seluruh logika tampilan untuk halaman Laporan
+     * (Analytics) DiklatHub.
+     */
+
+    let _laporanRawData = null;
+    let _laporanChartInstance = null;
+
+    /**
+     * [FIXED & STABLE] Memuat data rekapitulasi laporan berdasarkan tahun
+     * Logic ini sudah disinkronkan untuk SM (Tawaran) dan SACC (Diterima)
+     */
+    function loadLaporanRekap() {
+        const yearInput = document.getElementById('laporan-year-filter');
+        const year = yearInput && yearInput.value ? yearInput.value : new Date().getFullYear().toString();
+
+        // Set default year
+        if (yearInput && !yearInput.value) yearInput.value = year;
+
+        document.getElementById('laporan-loading').style.display = 'block';
+        document.getElementById('laporan-content').style.display = 'none';
+        document.getElementById('btn-export-laporan').style.display = 'none';
+
+        google.script.run
+            .withSuccessHandler(function (res) {
+                document.getElementById('laporan-loading').style.display = 'none';
+                if (!res || !res.success) {
+                    document.getElementById('laporan-loading').innerHTML =
+                        '<p style="color:#ef4444;">Gagal memuat data: ' + (res ? res.message : 'Unknown error') + '</p>';
+                    document.getElementById('laporan-loading').style.display = 'block';
+                    return;
+                }
+                _laporanRawData = res;
+                renderLaporanAll(res);
+                document.getElementById('laporan-content').style.display = 'block';
+                document.getElementById('btn-export-laporan').style.display = 'flex';
+            })
+            .withFailureHandler(function (err) {
+                document.getElementById('laporan-loading').innerHTML =
+                    '<p style="color:#ef4444;">Error: ' + err.message + '</p>';
+            })
+            .getRekapMagangReport(year);
+    }
+
+    /**
+     * Render semua komponen halaman laporan
+     */
+    function renderLaporanAll(res) {
+        renderLaporanSummaryCards(res);
+        renderLaporanGrandTotal(res);
+        renderLaporanTable(res);
+        renderLaporanChart(res, 'all');
+        renderLaporanRateBars(res);
+    }
+
+    /**
+     * Summary KPI Cards
+     */
+    function renderLaporanSummaryCards(res) {
+        const container = document.getElementById('laporan-summary-cards');
+        if (!container) return;
+
+        const colors = {
+            'Magang': { cls: 'card-magang', emoji: '🎓', color: '#667eea' },
+            'PKL': { cls: 'card-pkl', emoji: '🏭', color: '#f5576c' },
+            'KKN Profesi': { cls: 'card-kkn', emoji: '🌱', color: '#4facfe' },
+            'Penelitian': { cls: 'card-penelitian', emoji: '🔬', color: '#43e97b' },
+        };
+
+        let html = '';
+        res.kategori.forEach(k => {
+            const s = res.summary[k];
+            const c = colors[k] || { cls: '', emoji: '📄', color: '#9ca3af' };
+            const rateColor = s.rate >= 80 ? '#43e97b' : s.rate >= 50 ? '#f59e0b' : '#ef4444';
+            html += `
+        <div class="laporan-kpi-card ${c.cls}">
+            <div class="laporan-card-header">
+                <span class="laporan-card-emoji">${c.emoji}</span>
+                <span class="laporan-card-rate" style="color:${rateColor};">${s.rate}%</span>
+            </div>
+            <div class="laporan-card-title">${k}</div>
+            <div class="laporan-card-stats">
+                <div class="laporan-stat-group">
+                    <div class="laporan-stat-label">SM (Tawaran)</div>
+                    <div class="laporan-stat-value" style="color:#4facfe;">${s.totalTawaran}</div>
+                </div>
+                <div class="laporan-stat-group">
+                    <div class="laporan-stat-label">SACC (Diterima)</div>
+                    <div class="laporan-stat-value" style="color:#43e97b;">${s.totalDiterima}</div>
+                </div>
+            </div>
+        </div>`;
+        });
+        container.innerHTML = html;
+    }
+
+    /**
+     * Grand total banner
+     */
+    function renderLaporanGrandTotal(res) {
+        const gt = res.grandTotal;
+        const labelEl = document.getElementById('laporan-grand-label');
+        const rateEl = document.getElementById('laporan-grand-rate');
+        if (labelEl) labelEl.textContent = gt.totalTawaran + ' Tawaran / ' + gt.totalDiterima + ' Diterima';
+        if (rateEl) rateEl.textContent = gt.rate + '%';
+    }
+
+    /**
+     * Tabel rekapitulasi bulanan
+     */
+    function renderLaporanTable(res) {
+        const thead = document.getElementById('laporan-main-thead');
+        const tbody = document.getElementById('laporan-main-tbody');
+        if (!thead || !tbody) return;
+
+        let thRow1 = '<tr style="background:var(--bg-tertiary);">';
+        thRow1 += '<th rowspan="2" style="text-align:left;padding:10px 14px;position:sticky;left:0;background:var(--bg-tertiary);z-index:5;min-width:130px;">PERIHAL</th>';
+        res.bulan.forEach(b => {
+            thRow1 += `<th colspan="2" style="text-align:center;padding:8px;border-left:2px solid var(--border-color);">${b.toUpperCase()}</th>`;
+        });
+        thRow1 += '<th colspan="2" style="text-align:center;padding:8px;border-left:2px solid var(--border-color);background:rgba(102,126,234,.15);">TOTAL</th>';
+        thRow1 += '</tr>';
+
+        let thRow2 = '<tr style="background:var(--bg-tertiary);">';
+        for (let m = 0; m < 12; m++) {
+            thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:11px;color:#4facfe;border-left:2px solid var(--border-color);">SM</th>';
+            thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:11px;color:#43e97b;">SACC</th>';
+        }
+        thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:11px;color:#4facfe;border-left:2px solid var(--border-color);background:rgba(102,126,234,.15);">SM</th>';
+        thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:11px;color:#43e97b;background:rgba(102,126,234,.15);">SACC</th>';
+        thRow2 += '</tr>';
+
+        thead.innerHTML = thRow1 + thRow2;
+
+        let tbHTML = '';
+        res.kategori.forEach((k, ki) => {
+            const rowBg = ki % 2 === 0 ? '' : 'background:var(--bg-hover);';
+            tbHTML += `<tr style="${rowBg}">`;
+            tbHTML += `<td style="font-weight:600;padding:10px 14px;position:sticky;left:0;background:${ki % 2 === 0 ? 'var(--bg-secondary)' : 'var(--bg-hover)'};z-index:3;">${k}</td>`;
+
+            let totalTawaran = 0, totalDiterima = 0;
+            for (let m = 0; m < 12; m++) {
+                const cell = res.data[k][m];
+                totalTawaran += cell.tawaran;
+                totalDiterima += cell.diterima;
+                tbHTML += `<td class="rekap-tawaran"  style="border-left:2px solid var(--border-color);padding:8px;">${cell.tawaran || '-'}</td>`;
+                tbHTML += `<td class="rekap-diterima" style="padding:8px;">${cell.diterima || '-'}</td>`;
+            }
+            tbHTML += `<td class="rekap-tawaran"  style="border-left:2px solid var(--border-color);padding:8px;background:rgba(102,126,234,.1);">${totalTawaran}</td>`;
+            tbHTML += `<td class="rekap-diterima" style="padding:8px;background:rgba(102,126,234,.1);">${totalDiterima}</td>`;
+            tbHTML += '</tr>';
+        });
+
+        tbHTML += '<tr class="rekap-total-row" style="border-top:2px solid var(--border-color);">';
+        tbHTML += '<td style="font-weight:700;padding:10px 14px;position:sticky;left:0;background:var(--bg-tertiary);z-index:3;">JUMLAH</td>';
+
+        let grandSM = 0, grandSACC = 0;
+        for (let m = 0; m < 12; m++) {
+            let monthSM = 0, monthSACC = 0;
+            res.kategori.forEach(k => { monthSM += res.data[k][m].tawaran; monthSACC += res.data[k][m].diterima; });
+            grandSM += monthSM; grandSACC += monthSACC;
+            tbHTML += `<td style="border-left:2px solid var(--border-color);padding:8px;color:#4facfe;font-weight:700;">${monthSM || '-'}</td>`;
+            tbHTML += `<td style="padding:8px;color:#43e97b;font-weight:700;">${monthSACC || '-'}</td>`;
+        }
+        tbHTML += `<td style="border-left:2px solid var(--border-color);padding:8px;color:#4facfe;font-weight:800;background:rgba(102,126,234,.15);">${grandSM}</td>`;
+        tbHTML += `<td style="padding:8px;color:#43e97b;font-weight:800;background:rgba(102,126,234,.15);">${grandSACC}</td>`;
+        tbHTML += '</tr>';
+
+        tbody.innerHTML = tbHTML;
+    }
+
+    /**
+     * Chart Laporan
+     */
+    function renderLaporanChart(res, filterKategori) {
+        const ctx = document.getElementById('chart-laporan-rekap');
+        if (!ctx) return;
+
+        const tawaranArr = [];
+        const diterimaArr = [];
+
+        for (let m = 0; m < 12; m++) {
+            let sm = 0, sacc = 0;
+            res.kategori.forEach(k => {
+                if (filterKategori === 'all' || filterKategori === k) {
+                    sm += res.data[k][m].tawaran;
+                    sacc += res.data[k][m].diterima;
+                }
+            });
+            tawaranArr.push(sm);
+            diterimaArr.push(sacc);
+        }
+
+        if (_laporanChartInstance) {
+            _laporanChartInstance.destroy();
+            _laporanChartInstance = null;
+        }
+
+        _laporanChartInstance = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: res.bulan,
+                datasets: [
+                    { label: 'SM (Tawaran)', data: tawaranArr, backgroundColor: 'rgba(79,172,254,0.7)', borderColor: '#4facfe', borderWidth: 2, borderRadius: 6 },
+                    { label: 'SACC (Diterima)', data: diterimaArr, backgroundColor: 'rgba(67,233,123,0.7)', borderColor: '#43e97b', borderWidth: 2, borderRadius: 6 }
+                ]
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: {
+                    legend: { position: 'top' },
+                    tooltip: {
+                        callbacks: {
+                            afterLabel: function (ctx) {
+                                const idx = ctx.dataIndex;
+                                const sm = tawaranArr[idx], sacc = diterimaArr[idx];
+                                if (ctx.datasetIndex === 1 && sm > 0) return 'Rate: ' + Math.round((sacc / sm) * 100) + '%';
+                                return '';
+                            }
+                        }
+                    }
+                },
+                scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } }
+            }
+        });
+    }
+
+    function switchLaporanChart(filterKategori) {
+        if (!_laporanRawData) return;
+        renderLaporanChart(_laporanRawData, filterKategori);
+    }
+
+    function renderLaporanRateBars(res) {
+        const container = document.getElementById('laporan-rate-bars');
+        if (!container) return;
+
+        const gradients = {
+            'Magang': 'linear-gradient(90deg,#667eea,#764ba2)',
+            'PKL': 'linear-gradient(90deg,#f093fb,#f5576c)',
+            'KKN Profesi': 'linear-gradient(90deg,#4facfe,#00f2fe)',
+            'Penelitian': 'linear-gradient(90deg,#43e97b,#38f9d7)',
+        };
+
+        let html = '';
+        res.kategori.forEach(k => {
+            const s = res.summary[k];
+            const rateColor = s.rate >= 80 ? '#43e97b' : s.rate >= 50 ? '#f59e0b' : '#ef4444';
+            const pct = Math.min(s.rate, 100);
+            const grad = gradients[k] || 'linear-gradient(90deg,#9ca3af,#6b7280)';
+            html += `
+        <div class="laporan-rate-bar-wrap">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:4px;">
+                <div style="font-weight:600; font-size:14px; color:var(--text-primary);">${k}</div>
+                <div style="display:flex; gap:16px; align-items:center;">
+                    <span style="font-size:12px; color:var(--text-secondary);">${s.totalDiterima} / ${s.totalTawaran}</span>
+                    <span style="font-size:16px; font-weight:800; color:${rateColor};">${s.rate}%</span>
+                </div>
+            </div>
+            <div class="laporan-rate-bar-track">
+                <div class="laporan-rate-bar-fill" style="width:0%; background:${grad};" data-pct="${pct}"></div>
+            </div>
+        </div>`;
+        });
+        container.innerHTML = html;
+        setTimeout(() => { container.querySelectorAll('.laporan-rate-bar-fill').forEach(el => { el.style.width = el.dataset.pct + '%'; }); }, 100);
+    }
+
+    function exportLaporanCSV() {
+        if (!_laporanRawData) return;
+        const res = _laporanRawData;
+        let csvRows = [];
+        let h1 = ['PERIHAL'];
+        res.bulan.forEach(b => { h1.push(b + ' SM'); h1.push(b + ' SACC'); });
+        h1.push('TOTAL SM'); h1.push('TOTAL SACC'); h1.push('RATE');
+        csvRows.push(h1.join(','));
+
+        res.kategori.forEach(k => {
+            let row = [k]; let totSM = 0, totSACC = 0;
+            for (let m = 0; m < 12; m++) {
+                row.push(res.data[k][m].tawaran); row.push(res.data[k][m].diterima);
+                totSM += res.data[k][m].tawaran; totSACC += res.data[k][m].diterima;
+            }
+            const rate = totSM > 0 ? Math.round((totSACC / totSM) * 100) : 0;
+            row.push(totSM); row.push(totSACC); row.push(rate + '%');
+            csvRows.push(row.join(','));
+        });
+
+        let gtRow = ['JUMLAH'];
+        for (let m = 0; m < 12; m++) {
+            let sm = 0, sacc = 0;
+            res.kategori.forEach(k => { sm += res.data[k][m].tawaran; sacc += res.data[k][m].diterima; });
+            gtRow.push(sm); gtRow.push(sacc);
+        }
+        const gt = res.grandTotal;
+        gtRow.push(gt.totalTawaran); gtRow.push(gt.totalDiterima); gtRow.push(gt.rate + '%');
+        csvRows.push(gtRow.join(','));
+
+        const csvContent = '\uFEFF' + csvRows.join('\n');
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = 'Rekap_Magang_' + (res.year || 'all') + '.csv';
+        a.click(); URL.revokeObjectURL(url);
+        if (typeof showToast === 'function') showToast('success', 'Export Berhasil', 'File CSV berhasil diunduh.');
+    }
+
+    // Auto-trigger
+    (function () {
+        function hookLaporanPage() {
+            const laporanPage = document.getElementById('page-laporan');
+            if (!laporanPage) return;
+            const observer = new MutationObserver(function (mutations) {
+                mutations.forEach(function (mutation) {
+                    if (mutation.attributeName === 'class') {
+                        const isActive = laporanPage.classList.contains('active');
+                        if (isActive && typeof loadLaporanRekap === 'function') {
+                            if (!window._laporanLoaded) { window._laporanLoaded = true; loadLaporanRekap(); }
+                        }
+                        if (!isActive) window._laporanLoaded = false;
+                    }
+                });
+            });
+            observer.observe(laporanPage, { attributes: true });
+            document.addEventListener('click', function (e) {
+                const navItem = e.target.closest('[data-page="laporan"]');
+                if (navItem && typeof loadLaporanRekap === 'function') { setTimeout(function () { loadLaporanRekap(); }, 100); }
+            });
+        }
+        if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', hookLaporanPage); } else { hookLaporanPage(); }
+    })();
+
+    /**
+     * Sidebar Navigation
+     */
+    function loadLaporanYears() {
+        google.script.run.withSuccessHandler(function (response) {
+            if (response.success && response.years) { renderLaporanSidebar(response.years); }
+        }).getMagangYears();
+    }
+
+    function renderLaporanSidebar(years) {
+        const submenu = document.getElementById('submenu-laporan');
+        if (!submenu) return;
+        if (years.length === 0) { submenu.innerHTML = '<li class="submenu-item disabled">Tidak ada data</li>'; return; }
+        submenu.innerHTML = years.map(year => `
+        <li class="submenu-item" onclick="navigateToYear(${year})">
+            <span style="width: 8px; height: 8px; border-radius: 50%; background: #667eea; opacity: 0.5;"></span>
+            Tahun ${year}
+        </li>
+    `).join('');
+    }
+
+    function navigateToYear(year) {
+        navigateToPage('laporan');
+        const yearInput = document.getElementById('laporan-year-filter');
+        if (yearInput) {
+            yearInput.value = year;
+            setTimeout(() => { loadLaporanRekap(); }, 100);
+        }
+    }
 
 </script>
