@@ -5568,3 +5568,243 @@ function setGlobalAbsensiState(isActive) {
     return { success: false, message: 'Gagal memperbarui status: ' + e.toString() };
   }
 }
+
+/**
+ * ============================================================
+ * LAPORAN LOGIC (BACKEND)
+ * ============================================================
+ * File ini berisi seluruh logika pemrosesan data untuk laporan
+ * DiklatHub, termasuk rekapitulasi tawaran dan deteksi kategori.
+ */
+
+/**
+ * [FIXED] Mengambil daftar nama sheet batch magang (bulan tahun)
+ */
+function getMagangBatchNames() {
+  try {
+    const ss = getSpreadsheet();
+    const sheets = ss.getSheets();
+    const excludedSheets = [
+      'Dashboard', 'Data Karyawan', 'Data Magang', 'Template', 'TEMPLATE',
+      'Archive', 'Setting', 'Settings', 'Activity Log',
+      'Login/register', 'Notifikasi'
+    ];
+    const batchNames = [];
+    
+    sheets.forEach(sheet => {
+      const name = sheet.getName();
+      if (!excludedSheets.includes(name) && !sheet.isSheetHidden() && !name.toLowerCase().includes('lookers')) {
+        batchNames.push(name);
+      }
+    });
+    
+    return { success: true, batchNames: batchNames };
+  } catch (error) {
+    return { success: false, message: error.toString() };
+  }
+}
+
+/**
+ * [FIXED & STABLE] Mengambil daftar tahun unik dari semua batch magang
+ */
+function getMagangYears() {
+  try {
+    const res = getMagangBatchNames();
+    if (!res.success) return res;
+    
+    const years = new Set();
+    const currentYear = new Date().getFullYear();
+    
+    // Tambahkan tahun saat ini sebagai default
+    years.add(currentYear);
+    
+    res.batchNames.forEach(name => {
+      // Asumsi format nama sheet: "Bulan Tahun" (Contoh: "Januari 2026")
+      const parts = name.split(' ');
+      const year = parseInt(parts[parts.length - 1]);
+      if (!isNaN(year) && year > 2000 && year < 2100) {
+        years.add(year);
+      }
+    });
+    
+    // Urutkan tahun dari yang terbaru
+    const sortedYears = Array.from(years).sort((a, b) => b - a);
+    return { success: true, years: sortedYears };
+  } catch (e) {
+    return { success: false, message: e.toString() };
+  }
+}
+
+/**
+ * [FIXED & STABLE] Menghasilkan rekapitulasi tawaran (surat masuk) vs diterima
+ * per kategori (Magang, PKL, KKN Profesi, Penelitian) per bulan
+ * FIXED: Mendukung deteksi kategori fuzzy dan fallback tanggal dari nama sheet.
+ */
+function getRekapMagangReport(year) {
+  try {
+    const ss = getSpreadsheet();
+    const sheets = ss.getSheets();
+    
+    const excludedSheets = [
+      'Dashboard', 'Data Karyawan', 'Data Magang', 'Template', 'TEMPLATE',
+      'Archive', 'Setting', 'Settings', 'Activity Log',
+      'Login/register', 'Notifikasi'
+    ];
+
+    const BULAN = ['Januari','Februari','Maret','April','Mei','Juni',
+                   'Juli','Agustus','September','Oktober','November','Desember'];
+    const KATEGORI = ['Magang','PKL','KKN Profesi','Penelitian'];
+
+    // Inisialisasi struktur result
+    const result = {};
+    KATEGORI.forEach(k => {
+      result[k] = {};
+      for (let m = 0; m < 12; m++) {
+        result[k][m] = { tawaran: 0, diterima: 0 };
+      }
+    });
+
+    // Status mapping yang lebih luas
+    const acceptedStatuses = ['diterima', 'diteruskan', 'aktif', 'selesai', 'lulus', 'tamat', 'sudah dibuatkan', 'disetujui', 'acc'];
+
+    sheets.forEach(sheet => {
+      const sheetName = sheet.getName();
+      
+      if (excludedSheets.includes(sheetName)) return;
+      if (sheetName.toLowerCase().includes('lookers')) return;
+      if (sheet.isSheetHidden()) return;
+
+      const lastRow = sheet.getLastRow();
+      if (lastRow <= 1) return;
+
+      const lastCol = sheet.getLastColumn();
+      if (lastCol === 0) return;
+
+      const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+      const headerMap = headers.map(h => h ? h.toString().trim().toUpperCase() : '');
+
+      // Identifikasi kolom
+      let tglIdx = headerMap.findIndex(h =>
+        ['TGL MASUK','TANGGAL MASUK','START DATE','TGL. MASUK','TANGGAL MULAI'].includes(h) ||
+        (h.includes('MASUK') && !h.includes('SURAT') && !h.includes('NOMOR') && !h.includes('KET'))
+      );
+      
+      if (tglIdx === -1) {
+        tglIdx = headerMap.findIndex(h => h === 'TGL' || h === 'TANGGAL' || h === 'DATE' || h.includes('WAKTU MASUK'));
+      }
+
+      let jenisIdx = headerMap.findIndex(h =>
+        h.includes('JENIS') || h === 'PROGRAM' || h === 'KATEGORI' || h.includes('PENGAJUAN')
+      );
+
+      let statusIdx = headerMap.findIndex(h =>
+        ['KET','STATUS','KETERANGAN','KETERANGAN STATUS','KET.','VALIDASI','HASIL'].includes(h)
+      );
+
+      // Metadata dari nama sheet
+      let sheetMonth = -1;
+      let sheetYear = -1;
+      const nameParts = sheetName.split(' ');
+      if (nameParts.length >= 2) {
+          const mIdx = BULAN.indexOf(nameParts[0]);
+          if (mIdx !== -1) sheetMonth = mIdx;
+          const y = parseInt(nameParts[nameParts.length - 1]);
+          if (!isNaN(y)) sheetYear = y;
+      }
+
+      const range = sheet.getRange(2, 1, lastRow - 1, lastCol);
+      const data = range.getValues();
+
+      data.forEach(row => {
+        let tglDate = null;
+        if (tglIdx !== -1 && row[tglIdx]) {
+           tglDate = (row[tglIdx] instanceof Date) ? row[tglIdx] : new Date(row[tglIdx]);
+        }
+        
+        if ((!tglDate || isNaN(tglDate.getTime())) && sheetMonth !== -1 && sheetYear !== -1) {
+            tglDate = new Date(sheetYear, sheetMonth, 1);
+        }
+        
+        if (!tglDate || isNaN(tglDate.getTime())) return;
+
+        if (year && year !== 'all') {
+          if (tglDate.getFullYear().toString() !== year.toString()) return;
+        }
+
+        const month = tglDate.getMonth();
+
+        // Tentukan kategori (Fuzzy Logic)
+        let kat = null;
+        if (jenisIdx !== -1 && row[jenisIdx]) {
+            const rawJenis = row[jenisIdx].toString().trim().toUpperCase();
+            if (rawJenis.includes('KKN')) kat = 'KKN Profesi';
+            else if (rawJenis.includes('PKL') || rawJenis.includes('PRAKTEK') || rawJenis.includes('KERJA LAPANGAN') || rawJenis.includes('Praktek Kerja Lapangan')) kat = 'PKL';
+            else if (rawJenis.includes('PENELITIAN') || rawJenis.includes('RISET')) kat = 'Penelitian';
+            else if (rawJenis.includes('MAGANG')) kat = 'Magang';
+        }
+        
+        if (!kat) {
+            const rowStr = row.join(' ').toUpperCase();
+            if (rowStr.includes('KKN')) kat = 'KKN Profesi';
+            else if (rowStr.includes('PKL') || rowStr.includes('PRAKTEK') || rowStr.includes('KERJA LAPANGAN')) kat = 'PKL';
+            else if (rowStr.includes('PENELITIAN') || rowStr.includes('RISET')) kat = 'Penelitian';
+            else if (rowStr.includes('MAGANG')) kat = 'Magang';
+        }
+        
+        if (!kat) {
+            const sn = sheetName.toUpperCase();
+            if (sn.includes('KKN')) kat = 'KKN Profesi';
+            else if (sn.includes('PKL')) kat = 'PKL';
+            else if (sn.includes('PENELITIAN')) kat = 'Penelitian';
+            else if (sn.includes('MAGANG')) kat = 'Magang';
+        }
+        
+        if (!kat) kat = 'Magang';
+        if (!result[kat]) return;
+
+        const rawStatus = statusIdx !== -1 && row[statusIdx] ? row[statusIdx].toString().trim().toLowerCase() : '';
+        result[kat][month].tawaran++;
+
+        const isAccepted = acceptedStatuses.some(status => rawStatus.includes(status));
+        if (isAccepted) {
+          result[kat][month].diterima++;
+        }
+      });
+    });
+
+    const summary = {};
+    let grandTotalTawaran = 0;
+    let grandTotalDiterima = 0;
+
+    KATEGORI.forEach(k => {
+      let catTawaran = 0, catDiterima = 0;
+      for (let m = 0; m < 12; m++) {
+        catTawaran += result[k][m].tawaran;
+        catDiterima += result[k][m].diterima;
+      }
+      summary[k] = {
+        totalTawaran: catTawaran,
+        totalDiterima: catDiterima,
+        rate: catTawaran > 0 ? Math.round((catDiterima / catTawaran) * 100) : 0
+      };
+      grandTotalTawaran += catTawaran;
+      grandTotalDiterima += catDiterima;
+    });
+
+    const grandRate = grandTotalTawaran > 0 ? Math.round((grandTotalDiterima / grandTotalTawaran) * 100) : 0;
+
+    return {
+      success: true,
+      data: result,
+      summary: summary,
+      grandTotal: { totalTawaran: grandTotalTawaran, totalDiterima: grandTotalDiterima, rate: grandRate },
+      bulan: BULAN,
+      kategori: KATEGORI,
+      year: year || 'all'
+    };
+
+  } catch (error) {
+    Logger.log('Error in getRekapMagangReport: ' + error.toString());
+    return { success: false, message: error.toString() };
+  }
+}
