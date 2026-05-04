@@ -4014,6 +4014,8 @@ function getOnlineUsers() {
     const nameIdx = headers.indexOf('user');
     const lastActiveIdx = headers.indexOf('last active');
     const roleIdx = headers.indexOf('role');
+    const emailIdx = headers.indexOf('email');
+    const hiddenIdx = headers.indexOf('hidden status');
     
     if (lastActiveIdx === -1) return { success: true, users: [] };
     
@@ -4024,10 +4026,16 @@ function getOnlineUsers() {
     
     for(let i=1; i<data.length; i++) {
         const lastActive = data[i][lastActiveIdx];
+        const role = data[i][roleIdx] || 'User';
+        const isHidden = hiddenIdx !== -1 ? (data[i][hiddenIdx] === 'Hidden') : false;
+
+        // Skip if user is Developer AND isHidden is true
+        if (role === 'Developer' && isHidden) continue;
+
         if (lastActive instanceof Date && lastActive > cutoff) {
             onlineUsers.push({
                 name: data[i][nameIdx] || 'User',
-                role: data[i][roleIdx] || 'User',
+                role: role,
                 initial: (data[i][nameIdx] || 'U').charAt(0).toUpperCase()
             });
         }
@@ -4037,6 +4045,65 @@ function getOnlineUsers() {
     
   } catch(e) {
     return { success: false, message: e.toString() };
+  }
+}
+
+/**
+ * Set Hidden Online Status for Developer
+ */
+function setDeveloperHiddenStatus(email, isHidden) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Login/register');
+    if (!sheet) return { success: false, message: 'Database tidak ditemukan' };
+    
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0].map(h => h.toString().toLowerCase());
+    const emailIdx = headers.indexOf('email');
+    let hiddenIdx = headers.indexOf('hidden status');
+    
+    if (hiddenIdx === -1) {
+      // Add column if missing
+      sheet.getRange(1, headers.length + 1).setValue('Hidden Status');
+      hiddenIdx = headers.length;
+    }
+    
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][emailIdx]).toLowerCase() === String(email).toLowerCase()) {
+        sheet.getRange(i + 1, hiddenIdx + 1).setValue(isHidden ? 'Hidden' : 'Visible');
+        return { success: true, message: `Status online berhasil ${isHidden ? 'disembunyikan' : 'ditampilkan'}.` };
+      }
+    }
+    return { success: false, message: 'User tidak ditemukan' };
+  } catch (e) {
+    return { success: false, message: e.toString() };
+  }
+}
+
+/**
+ * Get Hidden Online Status
+ */
+function getDeveloperHiddenStatus(email) {
+  try {
+    const ss = getSpreadsheet();
+    const sheet = ss.getSheetByName('Login/register');
+    if (!sheet) return false;
+    
+    const data = sheet.getDataRange().getValues();
+    const headers = data[0].map(h => h.toString().toLowerCase());
+    const emailIdx = headers.indexOf('email');
+    const hiddenIdx = headers.indexOf('hidden status');
+    
+    if (hiddenIdx === -1) return false;
+    
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][emailIdx]).toLowerCase() === String(email).toLowerCase()) {
+        return data[i][hiddenIdx] === 'Hidden';
+      }
+    }
+    return false;
+  } catch (e) {
+    return false;
   }
 }
 
@@ -5573,36 +5640,11 @@ function setGlobalAbsensiState(isActive) {
  * ============================================================
  * LAPORAN LOGIC (BACKEND)
  * ============================================================
- * File ini berisi seluruh logika pemrosesan data untuk laporan
- * DiklatHub, termasuk rekapitulasi tawaran dan deteksi kategori.
+ * Berisi seluruh logika pemrosesan data untuk laporan DiklatHub,
+ * termasuk rekapitulasi tawaran dan deteksi kategori.
+ * NOTE: getMagangBatchNames() sudah tersedia di baris sebelumnya (dengan cache).
+ * Fungsi ini di sini menggunakan yang sudah ada.
  */
-
-/**
- * [FIXED] Mengambil daftar nama sheet batch magang (bulan tahun)
- */
-function getMagangBatchNames() {
-  try {
-    const ss = getSpreadsheet();
-    const sheets = ss.getSheets();
-    const excludedSheets = [
-      'Dashboard', 'Data Karyawan', 'Data Magang', 'Template', 'TEMPLATE',
-      'Archive', 'Setting', 'Settings', 'Activity Log',
-      'Login/register', 'Notifikasi'
-    ];
-    const batchNames = [];
-    
-    sheets.forEach(sheet => {
-      const name = sheet.getName();
-      if (!excludedSheets.includes(name) && !sheet.isSheetHidden() && !name.toLowerCase().includes('lookers')) {
-        batchNames.push(name);
-      }
-    });
-    
-    return { success: true, batchNames: batchNames };
-  } catch (error) {
-    return { success: false, message: error.toString() };
-  }
-}
 
 /**
  * [FIXED & STABLE] Mengambil daftar tahun unik dari semua batch magang
@@ -5637,8 +5679,8 @@ function getMagangYears() {
 
 /**
  * [FIXED & STABLE] Menghasilkan rekapitulasi tawaran (surat masuk) vs diterima
- * per kategori (Magang, PKL, KKN Profesi, Penelitian) per bulan
- * FIXED: Mendukung deteksi kategori fuzzy dan fallback tanggal dari nama sheet.
+ * per kategori (Magang, PKL, KKN Profesi, Penelitian) per bulan.
+ * Mendukung deteksi kategori fuzzy dan fallback tanggal dari nama sheet.
  */
 function getRekapMagangReport(year) {
   try {
@@ -5738,7 +5780,7 @@ function getRekapMagangReport(year) {
         if (jenisIdx !== -1 && row[jenisIdx]) {
             const rawJenis = row[jenisIdx].toString().trim().toUpperCase();
             if (rawJenis.includes('KKN')) kat = 'KKN Profesi';
-            else if (rawJenis.includes('PKL') || rawJenis.includes('PRAKTEK') || rawJenis.includes('KERJA LAPANGAN') || rawJenis.includes('Praktek Kerja Lapangan')) kat = 'PKL';
+            else if (rawJenis.includes('PKL') || rawJenis.includes('PRAKTEK') || rawJenis.includes('KERJA LAPANGAN')) kat = 'PKL';
             else if (rawJenis.includes('PENELITIAN') || rawJenis.includes('RISET')) kat = 'Penelitian';
             else if (rawJenis.includes('MAGANG')) kat = 'Magang';
         }
