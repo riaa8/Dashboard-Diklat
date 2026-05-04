@@ -494,6 +494,16 @@
             }
         }
 
+        // Hide/Show Super Admin specific menu
+        const saMenu = document.getElementById('menu-super-admin');
+        if (saMenu) {
+            if (userRole === 'Super Admin') {
+                saMenu.style.display = 'flex';
+            } else {
+                saMenu.style.display = 'none';
+            }
+        }
+
         // 1. Hide/Show restricted menus 
         if (userRole === 'User') {
             hideRestrictedMenus();
@@ -794,7 +804,6 @@
 
         // Initial Data Load
         if (typeof loadDashboardData === 'function') loadDashboardData();
-        if (typeof loadLaporanYears === 'function') loadLaporanYears();
 
         // Show Dashboard by default
         if (typeof navigateToPage === 'function') navigateToPage('dashboard');
@@ -868,8 +877,19 @@
             item.addEventListener('click', (e) => {
                 e.preventDefault();
 
+                // Toggle submenu if exists
+                if (item.classList.contains('has-submenu')) {
+                    item.classList.toggle('open');
+                    const submenu = item.nextElementSibling;
+                    if (submenu && submenu.classList.contains('submenu')) {
+                        submenu.classList.toggle('open');
+                    }
+                }
+
                 const pageName = item.getAttribute('data-page');
-                navigateToPage(pageName);
+                if (pageName) {
+                    navigateToPage(pageName);
+                }
             });
         });
     }
@@ -913,10 +933,7 @@
         if (pageName === 'karyawan') {
             loadKaryawanData();
         } else if (pageName === 'magang') {
-            loadMagangBatches();
-        } else if (pageName === 'laporan') {
-            if (typeof loadLaporanYears === 'function') loadLaporanYears();
-            if (typeof loadLaporanRekap === 'function') loadLaporanRekap();
+            loadMagangBatches(); // Changed from loadMagangData()
         } else if (pageName === 'analytics') {
             loadAnalyticsData();
         } else if (pageName === 'activity') {
@@ -7826,10 +7843,10 @@
                             </table>
                         </div>
                     </div>
-                </div>
             </div>
         `;
         document.body.insertAdjacentHTML('beforeend', modalHtml);
+        
         loadAllUsers();
     }
 
@@ -8224,6 +8241,30 @@
             btnMaint.style.color = isMaintenanceActive ? '#10b981' : '#ef4444';
             btnMaint.style.borderColor = isMaintenanceActive ? '#10b981' : '#ef4444';
         }
+
+        const btnHidden = document.getElementById('btn-hidden-status-toggle');
+        if (btnHidden) {
+            google.script.run.withSuccessHandler(isHidden => {
+                btnHidden.innerHTML = `<span class="icon-emoji">${isHidden ? '🕵️' : '👻'}</span> ${isHidden ? 'Online: Tersembunyi' : 'Online: Terlihat'}`;
+                btnHidden.style.color = isHidden ? '#f59e0b' : 'var(--text-primary)';
+                btnHidden.style.borderColor = isHidden ? '#f59e0b' : 'var(--border-color)';
+            }).getDeveloperHiddenStatus(currentUser.email);
+        }
+    }
+
+    function toggleDeveloperHiddenStatus() {
+        const btn = document.getElementById('btn-hidden-status-toggle');
+        if (!btn) return;
+
+        btn.disabled = true;
+        const currentText = btn.innerHTML;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Processing...';
+
+        google.script.run.withSuccessHandler(isHiddenNow => {
+            showToast('success', 'Berhasil', 'Status online berhasil diperbarui.');
+            btn.disabled = false;
+            updateDeveloperMenuUI();
+        }).setDeveloperHiddenStatus(currentUser.email, !currentText.includes('Tersembunyi'));
     }
 
     // ===== DEVELOPER MENU & ANNOUNCEMENT LOGIC =====
@@ -8296,6 +8337,9 @@
                                 </button>
                                 <button class="btn-secondary" onclick="window.location.reload()" style="border-color:var(--border-color);">
                                     <span class="icon-emoji">🔄</span> Reload Page
+                                </button>
+                                <button id="btn-hidden-status-toggle" class="btn-secondary" onclick="toggleDeveloperHiddenStatus()">
+                                    <span class="icon-emoji">👻</span> Hidden Status: ...
                                 </button>
                             </div>
                         </div>
@@ -8726,6 +8770,49 @@
         if (modal) modal.remove();
     }
 
+    // ===== SUPER ADMIN MENU LOGIC =====
+    function showSuperAdminMenu() {
+        if (!currentUser || currentUser.role !== 'Super Admin') return;
+
+        const modalHtml = `
+            <div class="modal-overlay" id="modal-super-admin" onclick="closeSuperAdminModal(event)">
+                <div class="modal glass-panel fade-in active" onclick="event.stopPropagation()" style="max-width: 400px; max-height: 90vh;">
+                    <div class="modal-header">
+                        <h3>Menu Super Admin</h3>
+                        <button class="modal-close" onclick="closeSuperAdminModal()">×</button>
+                    </div>
+                    <div class="modal-body dev-menu-container">
+                        <!-- Super Admin Control Panel Section -->
+                        <div class="dev-section">
+                            <div class="dev-section-title">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.7-3.7a1 1 0 000-1.4l-1.6-1.6a1 1 0 00-1.4 0l-3.7 3.7z"></path><path d="M20 11V8h-3M3 14H2v7c0 1.1.9 2 2 2h7v-1M3 14h7v7H3v-7z"></path><path d="M7 21a2 2 0 100-4 2 2 0 000 4z"></path></svg>
+                                Terminal Control Panel
+                            </div>
+                            <div class="dev-grid-buttons" style="grid-template-columns: 1fr;">
+                                <button class="btn-secondary" onclick="document.getElementById('dev-terminal').style.display='flex'; closeSuperAdminModal();">
+                                    <span class="icon-emoji">⌨️</span> Open Terminal
+                                </button>
+                                <button class="btn-secondary" onclick="window.location.reload()" style="border-color:var(--border-color);">
+                                    <span class="icon-emoji">🔄</span> Reload Page
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+    }
+
+    function closeSuperAdminModal(event) {
+        if (event && event.target.id !== 'modal-super-admin' && !event.target.classList.contains('modal-close')) return;
+        const modal = document.getElementById('modal-super-admin');
+        if (modal) {
+            modal.querySelector('.modal').classList.remove('active');
+            setTimeout(() => modal.remove(), 300);
+        }
+    }
+
 
 
     function initAnnouncementCheck() {
@@ -8763,12 +8850,12 @@
         }).getGlobalAnnouncement(currentUser.email);
     }
 
+
     /**
      * ============================================================
      * LAPORAN SCRIPT (FRONTEND)
      * ============================================================
-     * File ini berisi seluruh logika tampilan untuk halaman Laporan
-     * (Analytics) DiklatHub.
+     * Berisi seluruh logika tampilan untuk halaman Laporan DiklatHub.
      */
 
     let _laporanRawData = null;
@@ -8776,13 +8863,11 @@
 
     /**
      * [FIXED & STABLE] Memuat data rekapitulasi laporan berdasarkan tahun
-     * Logic ini sudah disinkronkan untuk SM (Tawaran) dan SACC (Diterima)
      */
     function loadLaporanRekap() {
         const yearInput = document.getElementById('laporan-year-filter');
         const year = yearInput && yearInput.value ? yearInput.value : new Date().getFullYear().toString();
 
-        // Set default year
         if (yearInput && !yearInput.value) yearInput.value = year;
 
         document.getElementById('laporan-loading').style.display = 'block';
@@ -8810,9 +8895,6 @@
             .getRekapMagangReport(year);
     }
 
-    /**
-     * Render semua komponen halaman laporan
-     */
     function renderLaporanAll(res) {
         renderLaporanSummaryCards(res);
         renderLaporanGrandTotal(res);
@@ -8821,9 +8903,6 @@
         renderLaporanRateBars(res);
     }
 
-    /**
-     * Summary KPI Cards
-     */
     function renderLaporanSummaryCards(res) {
         const container = document.getElementById('laporan-summary-cards');
         if (!container) return;
@@ -8862,9 +8941,6 @@
         container.innerHTML = html;
     }
 
-    /**
-     * Grand total banner
-     */
     function renderLaporanGrandTotal(res) {
         const gt = res.grandTotal;
         const labelEl = document.getElementById('laporan-grand-label');
@@ -8873,9 +8949,6 @@
         if (rateEl) rateEl.textContent = gt.rate + '%';
     }
 
-    /**
-     * Tabel rekapitulasi bulanan
-     */
     function renderLaporanTable(res) {
         const thead = document.getElementById('laporan-main-thead');
         const tbody = document.getElementById('laporan-main-tbody');
@@ -8911,10 +8984,10 @@
                 const cell = res.data[k][m];
                 totalTawaran += cell.tawaran;
                 totalDiterima += cell.diterima;
-                tbHTML += `<td class="rekap-tawaran"  style="border-left:2px solid var(--border-color);padding:8px;">${cell.tawaran || '-'}</td>`;
+                tbHTML += `<td class="rekap-tawaran" style="border-left:2px solid var(--border-color);padding:8px;">${cell.tawaran || '-'}</td>`;
                 tbHTML += `<td class="rekap-diterima" style="padding:8px;">${cell.diterima || '-'}</td>`;
             }
-            tbHTML += `<td class="rekap-tawaran"  style="border-left:2px solid var(--border-color);padding:8px;background:rgba(102,126,234,.1);">${totalTawaran}</td>`;
+            tbHTML += `<td class="rekap-tawaran" style="border-left:2px solid var(--border-color);padding:8px;background:rgba(102,126,234,.1);">${totalTawaran}</td>`;
             tbHTML += `<td class="rekap-diterima" style="padding:8px;background:rgba(102,126,234,.1);">${totalDiterima}</td>`;
             tbHTML += '</tr>';
         });
@@ -8937,9 +9010,6 @@
         tbody.innerHTML = tbHTML;
     }
 
-    /**
-     * Chart Laporan
-     */
     function renderLaporanChart(res, filterKategori) {
         const ctx = document.getElementById('chart-laporan-rekap');
         if (!ctx) return;
@@ -9072,37 +9142,25 @@
         if (typeof showToast === 'function') showToast('success', 'Export Berhasil', 'File CSV berhasil diunduh.');
     }
 
-    // Auto-trigger
-    (function () {
-        function hookLaporanPage() {
-            const laporanPage = document.getElementById('page-laporan');
-            if (!laporanPage) return;
-            const observer = new MutationObserver(function (mutations) {
-                mutations.forEach(function (mutation) {
-                    if (mutation.attributeName === 'class') {
-                        const isActive = laporanPage.classList.contains('active');
-                        if (isActive && typeof loadLaporanRekap === 'function') {
-                            if (!window._laporanLoaded) { window._laporanLoaded = true; loadLaporanRekap(); }
-                        }
-                        if (!isActive) window._laporanLoaded = false;
-                    }
-                });
-            });
-            observer.observe(laporanPage, { attributes: true });
-            document.addEventListener('click', function (e) {
-                const navItem = e.target.closest('[data-page="laporan"]');
-                if (navItem && typeof loadLaporanRekap === 'function') { setTimeout(function () { loadLaporanRekap(); }, 100); }
-            });
-        }
-        if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', hookLaporanPage); } else { hookLaporanPage(); }
-    })();
-
-    /**
-     * Sidebar Navigation
-     */
+    // Sidebar navigation year list
     function loadLaporanYears() {
         google.script.run.withSuccessHandler(function (response) {
-            if (response.success && response.years) { renderLaporanSidebar(response.years); }
+            if (response.success && response.years) { 
+                renderLaporanSidebar(response.years); 
+                
+                // Populate the select dropdown filter in the dashboard header
+                const yearSelect = document.getElementById('laporan-year-filter');
+                if (yearSelect) {
+                    // Keep the first option (Pilih Tahun) and remove others
+                    yearSelect.innerHTML = '<option value="">Pilih Tahun</option>';
+                    response.years.forEach(year => {
+                        const opt = document.createElement('option');
+                        opt.value = year;
+                        opt.textContent = year;
+                        yearSelect.appendChild(opt);
+                    });
+                }
+            }
         }).getMagangYears();
     }
 
@@ -9126,5 +9184,32 @@
             setTimeout(() => { loadLaporanRekap(); }, 100);
         }
     }
+
+    // Auto-hook laporan page
+    // Auto-hook laporan page & Load years for Sidebar
+    (function () {
+        function hookLaporanPage() {
+            // Load Sidebar Years
+            if (typeof loadLaporanYears === 'function') {
+                loadLaporanYears();
+            }
+
+            const laporanPage = document.getElementById('page-laporan');
+            if (!laporanPage) return;
+            const observer = new MutationObserver(function (mutations) {
+                mutations.forEach(function (mutation) {
+                    if (mutation.attributeName === 'class') {
+                        const isActive = laporanPage.classList.contains('active');
+                        if (isActive && typeof loadLaporanRekap === 'function') {
+                            if (!window._laporanLoaded) { window._laporanLoaded = true; loadLaporanRekap(); }
+                        }
+                        if (!isActive) window._laporanLoaded = false;
+                    }
+                });
+            });
+            observer.observe(laporanPage, { attributes: true });
+        }
+        if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', hookLaporanPage); } else { hookLaporanPage(); }
+    })();
 
 </script>
