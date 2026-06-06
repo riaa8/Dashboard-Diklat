@@ -7846,7 +7846,7 @@
             </div>
         `;
         document.body.insertAdjacentHTML('beforeend', modalHtml);
-        
+
         loadAllUsers();
     }
 
@@ -8957,18 +8957,20 @@
         let thRow1 = '<tr style="background:var(--bg-tertiary);">';
         thRow1 += '<th rowspan="2" style="text-align:left;padding:10px 14px;position:sticky;left:0;background:var(--bg-tertiary);z-index:5;min-width:130px;">PERIHAL</th>';
         res.bulan.forEach(b => {
-            thRow1 += `<th colspan="2" style="text-align:center;padding:8px;border-left:2px solid var(--border-color);">${b.toUpperCase()}</th>`;
+            thRow1 += `<th colspan="3" style="text-align:center;padding:8px;border-left:2px solid var(--border-color);">${b.toUpperCase()}</th>`;
         });
-        thRow1 += '<th colspan="2" style="text-align:center;padding:8px;border-left:2px solid var(--border-color);background:rgba(102,126,234,.15);">TOTAL</th>';
+        thRow1 += '<th colspan="3" style="text-align:center;padding:8px;border-left:2px solid var(--border-color);background:rgba(102,126,234,.15);">TOTAL</th>';
         thRow1 += '</tr>';
 
         let thRow2 = '<tr style="background:var(--bg-tertiary);">';
         for (let m = 0; m < 12; m++) {
-            thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:11px;color:#4facfe;border-left:2px solid var(--border-color);">SM</th>';
-            thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:11px;color:#43e97b;">SACC</th>';
+            thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:10px;color:#4facfe;border-left:2px solid var(--border-color);">SM</th>';
+            thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:10px;color:#43e97b;">SACC</th>';
+            thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:10px;color:#f59e0b;">CNCL</th>';
         }
-        thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:11px;color:#4facfe;border-left:2px solid var(--border-color);background:rgba(102,126,234,.15);">SM</th>';
-        thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:11px;color:#43e97b;background:rgba(102,126,234,.15);">SACC</th>';
+        thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:10px;color:#4facfe;border-left:2px solid var(--border-color);background:rgba(102,126,234,.15);">SM</th>';
+        thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:10px;color:#43e97b;background:rgba(102,126,234,.15);">SACC</th>';
+        thRow2 += '<th style="text-align:center;padding:6px 8px;font-size:10px;color:#f59e0b;background:rgba(102,126,234,.15);">CNCL</th>';
         thRow2 += '</tr>';
 
         thead.innerHTML = thRow1 + thRow2;
@@ -8979,32 +8981,41 @@
             tbHTML += `<tr style="${rowBg}">`;
             tbHTML += `<td style="font-weight:600;padding:10px 14px;position:sticky;left:0;background:${ki % 2 === 0 ? 'var(--bg-secondary)' : 'var(--bg-hover)'};z-index:3;">${k}</td>`;
 
-            let totalTawaran = 0, totalDiterima = 0;
+            let totalTawaran = 0, totalDiterima = 0, totalDitolak = 0;
             for (let m = 0; m < 12; m++) {
                 const cell = res.data[k][m];
-                totalTawaran += cell.tawaran;
-                totalDiterima += cell.diterima;
+                totalTawaran += cell.tawaran || 0;
+                totalDiterima += cell.diterima || 0;
+                totalDitolak += cell.ditolak || 0;
                 tbHTML += `<td class="rekap-tawaran" style="border-left:2px solid var(--border-color);padding:8px;">${cell.tawaran || '-'}</td>`;
                 tbHTML += `<td class="rekap-diterima" style="padding:8px;">${cell.diterima || '-'}</td>`;
+                tbHTML += `<td class="rekap-ditolak" style="padding:8px;color:rgba(245,158,11,.7);">${cell.ditolak || '-'}</td>`;
             }
-            tbHTML += `<td class="rekap-tawaran" style="border-left:2px solid var(--border-color);padding:8px;background:rgba(102,126,234,.1);">${totalTawaran}</td>`;
-            tbHTML += `<td class="rekap-diterima" style="padding:8px;background:rgba(102,126,234,.1);">${totalDiterima}</td>`;
+            tbHTML += `<td class="rekap-tawaran" style="border-left:2px solid var(--border-color);padding:8px;background:rgba(102,126,234,.1);font-weight:700;">${totalTawaran}</td>`;
+            tbHTML += `<td class="rekap-diterima" style="padding:8px;background:rgba(102,126,234,.1);font-weight:700;">${totalDiterima}</td>`;
+            tbHTML += `<td class="rekap-ditolak" style="padding:8px;background:rgba(102,126,234,.1);color:#f59e0b;font-weight:700;">${totalDitolak}</td>`;
             tbHTML += '</tr>';
         });
 
         tbHTML += '<tr class="rekap-total-row" style="border-top:2px solid var(--border-color);">';
         tbHTML += '<td style="font-weight:700;padding:10px 14px;position:sticky;left:0;background:var(--bg-tertiary);z-index:3;">JUMLAH</td>';
 
-        let grandSM = 0, grandSACC = 0;
+        let grandSM = 0, grandSACC = 0, grandDitolak = 0;
         for (let m = 0; m < 12; m++) {
-            let monthSM = 0, monthSACC = 0;
-            res.kategori.forEach(k => { monthSM += res.data[k][m].tawaran; monthSACC += res.data[k][m].diterima; });
-            grandSM += monthSM; grandSACC += monthSACC;
+            let monthSM = 0, monthSACC = 0, monthDitolak = 0;
+            res.kategori.forEach(k => {
+                monthSM += res.data[k][m].tawaran || 0;
+                monthSACC += res.data[k][m].diterima || 0;
+                monthDitolak += res.data[k][m].ditolak || 0;
+            });
+            grandSM += monthSM; grandSACC += monthSACC; grandDitolak += monthDitolak;
             tbHTML += `<td style="border-left:2px solid var(--border-color);padding:8px;color:#4facfe;font-weight:700;">${monthSM || '-'}</td>`;
             tbHTML += `<td style="padding:8px;color:#43e97b;font-weight:700;">${monthSACC || '-'}</td>`;
+            tbHTML += `<td style="padding:8px;color:#f59e0b;font-weight:700;">${monthDitolak || '-'}</td>`;
         }
         tbHTML += `<td style="border-left:2px solid var(--border-color);padding:8px;color:#4facfe;font-weight:800;background:rgba(102,126,234,.15);">${grandSM}</td>`;
         tbHTML += `<td style="padding:8px;color:#43e97b;font-weight:800;background:rgba(102,126,234,.15);">${grandSACC}</td>`;
+        tbHTML += `<td style="padding:8px;color:#f59e0b;font-weight:800;background:rgba(102,126,234,.15);">${grandDitolak}</td>`;
         tbHTML += '</tr>';
 
         tbody.innerHTML = tbHTML;
@@ -9016,17 +9027,20 @@
 
         const tawaranArr = [];
         const diterimaArr = [];
+        const pesertaArr = [];
 
         for (let m = 0; m < 12; m++) {
-            let sm = 0, sacc = 0;
+            let sm = 0, sacc = 0, pes = 0;
             res.kategori.forEach(k => {
                 if (filterKategori === 'all' || filterKategori === k) {
                     sm += res.data[k][m].tawaran;
                     sacc += res.data[k][m].diterima;
+                    pes += res.data[k][m].peserta || 0;
                 }
             });
             tawaranArr.push(sm);
             diterimaArr.push(sacc);
+            pesertaArr.push(pes);
         }
 
         if (_laporanChartInstance) {
@@ -9051,8 +9065,11 @@
                         callbacks: {
                             afterLabel: function (ctx) {
                                 const idx = ctx.dataIndex;
-                                const sm = tawaranArr[idx], sacc = diterimaArr[idx];
-                                if (ctx.datasetIndex === 1 && sm > 0) return 'Rate: ' + Math.round((sacc / sm) * 100) + '%';
+                                const sm = tawaranArr[idx], sacc = diterimaArr[idx], pes = pesertaArr[idx];
+                                if (ctx.datasetIndex === 1) {
+                                    const rateVal = pes > 0 ? Math.min(Math.round((sacc / pes) * 100), 100) : (sm > 0 ? Math.min(Math.round((sacc / sm) * 100), 100) : 0);
+                                    return 'Rate: ' + rateVal + '%';
+                                }
                                 return '';
                             }
                         }
@@ -9108,29 +9125,35 @@
         const res = _laporanRawData;
         let csvRows = [];
         let h1 = ['PERIHAL'];
-        res.bulan.forEach(b => { h1.push(b + ' SM'); h1.push(b + ' SACC'); });
-        h1.push('TOTAL SM'); h1.push('TOTAL SACC'); h1.push('RATE');
+        res.bulan.forEach(b => { h1.push(b + ' SM'); h1.push(b + ' SACC'); h1.push(b + ' CANCEL'); });
+        h1.push('TOTAL SM'); h1.push('TOTAL SACC'); h1.push('TOTAL CANCEL'); h1.push('RATE');
         csvRows.push(h1.join(','));
 
         res.kategori.forEach(k => {
-            let row = [k]; let totSM = 0, totSACC = 0;
+            let row = [k]; let totSM = 0, totSACC = 0, totCancel = 0, totPes = 0;
             for (let m = 0; m < 12; m++) {
-                row.push(res.data[k][m].tawaran); row.push(res.data[k][m].diterima);
-                totSM += res.data[k][m].tawaran; totSACC += res.data[k][m].diterima;
+                const c = res.data[k][m];
+                row.push(c.tawaran); row.push(c.diterima); row.push(c.ditolak);
+                totSM += c.tawaran; totSACC += c.diterima; totCancel += c.ditolak;
+                totPes += c.peserta || 0;
             }
-            const rate = totSM > 0 ? Math.round((totSACC / totSM) * 100) : 0;
-            row.push(totSM); row.push(totSACC); row.push(rate + '%');
+            const rate = totPes > 0 ? Math.min(Math.round((totSACC / totPes) * 100), 100) : (totSM > 0 ? Math.min(Math.round((totSACC / totSM) * 100), 100) : 0);
+            row.push(totSM); row.push(totSACC); row.push(totCancel); row.push(rate + '%');
             csvRows.push(row.join(','));
         });
 
         let gtRow = ['JUMLAH'];
         for (let m = 0; m < 12; m++) {
-            let sm = 0, sacc = 0;
-            res.kategori.forEach(k => { sm += res.data[k][m].tawaran; sacc += res.data[k][m].diterima; });
-            gtRow.push(sm); gtRow.push(sacc);
+            let sm = 0, sacc = 0, cancel = 0;
+            res.kategori.forEach(k => {
+                sm += res.data[k][m].tawaran;
+                sacc += res.data[k][m].diterima;
+                cancel += res.data[k][m].ditolak;
+            });
+            gtRow.push(sm); gtRow.push(sacc); gtRow.push(cancel);
         }
         const gt = res.grandTotal;
-        gtRow.push(gt.totalTawaran); gtRow.push(gt.totalDiterima); gtRow.push(gt.rate + '%');
+        gtRow.push(gt.totalTawaran); gtRow.push(gt.totalDiterima); gtRow.push(gt.totalDitolak); gtRow.push(gt.rate + '%');
         csvRows.push(gtRow.join(','));
 
         const csvContent = '\uFEFF' + csvRows.join('\n');
@@ -9145,9 +9168,9 @@
     // Sidebar navigation year list
     function loadLaporanYears() {
         google.script.run.withSuccessHandler(function (response) {
-            if (response.success && response.years) { 
-                renderLaporanSidebar(response.years); 
-                
+            if (response.success && response.years) {
+                renderLaporanSidebar(response.years);
+
                 // Populate the select dropdown filter in the dashboard header
                 const yearSelect = document.getElementById('laporan-year-filter');
                 if (yearSelect) {
