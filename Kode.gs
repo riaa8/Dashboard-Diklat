@@ -3879,17 +3879,22 @@ function doLogin(email, password) {
           return { success: false, message: 'Akun Anda non-aktif. Hubungi Admin.' };
         }
         
-        // Update Last Active
-        const lastActiveIdx = headers.indexOf('last active');
-        if (lastActiveIdx !== -1) {
-          sheet.getRange(i + 1, lastActiveIdx + 1).setValue(new Date());
-        } else {
-             let realLastActiveIdx = data[0].indexOf('Last Active');
-             if (realLastActiveIdx === -1) {
-                 sheet.getRange(1, data[0].length + 1).setValue('Last Active');
-                 realLastActiveIdx = data[0].length;
-             }
-             sheet.getRange(i + 1, realLastActiveIdx + 1).setValue(new Date());
+        // Update Last Active (Non-blocking: continue login even if sheet is protected)
+        try {
+          const lastActiveIdx = headers.indexOf('last active');
+          if (lastActiveIdx !== -1) {
+            sheet.getRange(i + 1, lastActiveIdx + 1).setValue(new Date());
+          } else {
+            let realLastActiveIdx = data[0].indexOf('Last Active');
+            if (realLastActiveIdx === -1) {
+              sheet.getRange(1, data[0].length + 1).setValue('Last Active');
+              realLastActiveIdx = data[0].length;
+            }
+            sheet.getRange(i + 1, realLastActiveIdx + 1).setValue(new Date());
+          }
+        } catch (err) {
+          Logger.log('Warning: Gagal update Last Active karena proteksi sheet: ' + err.toString());
+          // Tetap lanjut login karena kredensial sudah benar
         }
 
         // Assign Developer role to wildan if no role exists
@@ -3985,20 +3990,22 @@ function sendHeartbeat(email) {
     const headers = data[0].map(h => h.toString().toLowerCase());
     const emailIdx = headers.indexOf('email');
     
-    // Find Header 'Last Active' or create it
-    let lastActiveIdx = headers.indexOf('last active');
-    if (lastActiveIdx === -1) {
-        // Create if missing
-        sheet.getRange(1, headers.length + 1).setValue('Last Active');
-        lastActiveIdx = headers.length;
-    }
-    
-    // Find row
-    for(let i=1; i<data.length; i++) {
-        if(data[i][emailIdx] === email) {
-            sheet.getRange(i+1, lastActiveIdx+1).setValue(new Date());
-            return;
+    // Update Last Active (Non-blocking)
+    try {
+        let lastActiveIdx = headers.indexOf('last active');
+        if (lastActiveIdx === -1) {
+            sheet.getRange(1, headers.length + 1).setValue('Last Active');
+            lastActiveIdx = headers.length;
         }
+        
+        for(let i=1; i<data.length; i++) {
+            if(data[i][emailIdx] === email) {
+                sheet.getRange(i+1, lastActiveIdx+1).setValue(new Date());
+                return;
+            }
+        }
+    } catch (err) {
+        Logger.log('Heartbeat failed due to protection: ' + err.toString());
     }
   } catch(e) {}
 }
@@ -4144,6 +4151,7 @@ function getDashboardStats() {
             const statusIdx = headers.findIndex(h => ['STATUS', 'KET'].includes(h.toString().toUpperCase()));
             const startIdx = headers.findIndex(h => ['TGL MASUK', 'TANGGAL MULAI'].includes(h.toString().toUpperCase()));
             const endIdx = headers.findIndex(h => ['TGL SELESAI', 'TANGGAL SELESAI'].includes(h.toString().toUpperCase()));
+            const univIdx = headers.findIndex(h => ['ASAL SEKOLAH/PT', 'UNIVERSITAS', 'INSTITUSI'].includes(h.toString().toUpperCase()));
             
             const rawData = magangSheet.getRange(2, 1, Math.min(lastRow - 1, 100), headers.length).getValues();
             
@@ -4151,6 +4159,8 @@ function getDashboardStats() {
             const today = new Date();
             const sevenDaysInfo = new Date(today);
             sevenDaysInfo.setDate(today.getDate() + 7);
+            
+            const uniqueUnivs = new Set();
             
             rawData.forEach(row => {
                 const status = (row[statusIdx] || '').toString().toLowerCase();
@@ -4179,18 +4189,44 @@ function getDashboardStats() {
                     }
                 }
                 
+                // Univ Diversity
+                if (univIdx !== -1) {
+                    const univName = (row[univIdx] || '').toString().trim();
+                    if (univName && univName !== '-') uniqueUnivs.add(univName);
+                }
+                
                 // Unit Distribution
                 const unit = (row[unitIdx] || 'Lainnya').toString().trim();
                 if(unit) unitMap[unit] = (unitMap[unit] || 0) + 1;
             });
+            stats.magangUnivCount = uniqueUnivs.size;
         }
     }
     
-    // 2. Get Karyawan Count
+    // 2. Get Karyawan Count & Demographics
+    let karyawanMale = 0;
+    let karyawanFemale = 0;
+    
     if (karyawanSheet) {
          const lastRow = karyawanSheet.getLastRow();
          if (lastRow > 1) {
              stats.karyawan = lastRow - 1;
+             
+             // Calculate gender distribution
+             const headers = karyawanSheet.getRange(1, 1, 1, karyawanSheet.getLastColumn()).getValues()[0];
+             const genderIdx = headers.findIndex(h => ['GENDER', 'JENIS KELAMIN', 'L/P'].includes(h.toString().toUpperCase()));
+             
+             if (genderIdx !== -1) {
+                 const genderData = karyawanSheet.getRange(2, genderIdx + 1, lastRow - 1, 1).getValues();
+                 genderData.forEach(row => {
+                     const gender = (row[0] || '').toString().trim().toUpperCase();
+                     if (gender === 'M' || gender === 'L' || gender === 'LAKI-LAKI') {
+                         karyawanMale++;
+                     } else if (gender === 'F' || gender === 'P' || gender === 'PEREMPUAN' || gender === 'WANITA') {
+                         karyawanFemale++;
+                     }
+                 });
+             }
          }
     }
     
@@ -4219,7 +4255,12 @@ function getDashboardStats() {
             unit: {
                 labels: unitLabels,
                 data: unitData
-            }
+            },
+            karyawanDemographics: {
+                male: karyawanMale,
+                female: karyawanFemale
+            },
+            magangUnivCount: stats.magangUnivCount || 0
         }
     };
     
@@ -5699,15 +5740,35 @@ function getRekapMagangReport(year) {
 
     // Inisialisasi struktur result
     const result = {};
+    const seenLetters = {}; // Tracker for unique Nomor Surat: { category: { month: { letter1: true, ... } } }
+
     KATEGORI.forEach(k => {
       result[k] = {};
+      seenLetters[k] = {};
       for (let m = 0; m < 12; m++) {
-        result[k][m] = { tawaran: 0, diterima: 0 };
+        result[k][m] = { tawaran: 0, diterima: 0, ditolak: 0, peserta: 0 };
+        seenLetters[k][m] = {};
       }
     });
 
-    // Status mapping yang lebih luas
-    const acceptedStatuses = ['diterima', 'diteruskan', 'aktif', 'selesai', 'lulus', 'tamat', 'sudah dibuatkan', 'disetujui', 'acc'];
+    const parseIndoDate = (dateStr) => {
+        if (!dateStr) return null;
+        if (dateStr instanceof Date) return dateStr;
+        let s = String(dateStr).trim();
+        s = s.replace(/Januari/i, 'January')
+             .replace(/Februari/i, 'February')
+             .replace(/Maret/i, 'March')
+             .replace(/Mei/i, 'May')
+             .replace(/Juni/i, 'June')
+             .replace(/Juli/i, 'July')
+             .replace(/Agustus/i, 'August')
+             .replace(/Oktober/i, 'October')
+             .replace(/Nopember/i, 'November')
+             .replace(/November/i, 'November')
+             .replace(/Desember/i, 'December');
+        const d = new Date(s);
+        return isNaN(d.getTime()) ? null : d;
+    };
 
     sheets.forEach(sheet => {
       const sheetName = sheet.getName();
@@ -5725,48 +5786,47 @@ function getRekapMagangReport(year) {
       const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
       const headerMap = headers.map(h => h ? h.toString().trim().toUpperCase() : '');
 
-      // Identifikasi kolom
+      // Cari kolom TGL MASUK sebagai penentu bulan
       let tglIdx = headerMap.findIndex(h =>
-        ['TGL MASUK','TANGGAL MASUK','START DATE','TGL. MASUK','TANGGAL MULAI'].includes(h) ||
-        (h.includes('MASUK') && !h.includes('SURAT') && !h.includes('NOMOR') && !h.includes('KET'))
+        h.includes('TGL MASUK') || h.includes('TANGGAL MASUK') || h.includes('START DATE')
       );
       
-      if (tglIdx === -1) {
-        tglIdx = headerMap.findIndex(h => h === 'TGL' || h === 'TANGGAL' || h === 'DATE' || h.includes('WAKTU MASUK'));
-      }
+      let jenisIdx = headerMap.findIndex(h => h.includes('KM/PRAKTEK') || h.includes('KM/Praktek/Penelitian') || h.includes('PERIHAL') || h === 'JENIS' || h === 'PROGRAM' || h === 'KATEGORI');
+      let statusIdx = headerMap.findIndex(h => ['KET','STATUS','KETERANGAN','KETERANGAN STATUS','HASIL'].includes(h));
+      let nomorSuratIdx = headerMap.findIndex(h => h.includes('NOMOR SURAT') || h === 'NO SURAT');
+      
+      // [NEW] Parse date from sheet name as PRIMARY source of truth for the month
+      // This prevents "month leakage" where a row's date pushes it to a different month's report
+      let sheetDateFallback = null;
+      try {
+          const sName = sheetName.trim().toLowerCase();
+          // Find month name ignoring case
+          const mIdx = BULAN.findIndex(b => sName.includes(b.toLowerCase()));
+          const yMatch = sName.match(/\d{4}/);
+          if (mIdx !== -1) {
+              const parsedYear = yMatch ? parseInt(yMatch[0]) : (year && year !== 'all' ? parseInt(year) : new Date().getFullYear());
+              sheetDateFallback = new Date(parsedYear, mIdx, 1);
+          }
+      } catch(e) {}
 
-      let jenisIdx = headerMap.findIndex(h =>
-        h.includes('JENIS') || h === 'PROGRAM' || h === 'KATEGORI' || h.includes('PENGAJUAN')
-      );
-
-      let statusIdx = headerMap.findIndex(h =>
-        ['KET','STATUS','KETERANGAN','KETERANGAN STATUS','KET.','VALIDASI','HASIL'].includes(h)
-      );
-
-      // Metadata dari nama sheet
-      let sheetMonth = -1;
-      let sheetYear = -1;
-      const nameParts = sheetName.split(' ');
-      if (nameParts.length >= 2) {
-          const mIdx = BULAN.indexOf(nameParts[0]);
-          if (mIdx !== -1) sheetMonth = mIdx;
-          const y = parseInt(nameParts[nameParts.length - 1]);
-          if (!isNaN(y)) sheetYear = y;
-      }
+      // Fallback date columns if we need row-level parsing
+      let fallbackTglIdx = headerMap.findIndex(h => h.includes('TGL MSK SURAT') || h.includes('TANGGAL SURAT'));
 
       const range = sheet.getRange(2, 1, lastRow - 1, lastCol);
       const data = range.getValues();
 
       data.forEach(row => {
-        let tglDate = null;
-        if (tglIdx !== -1 && row[tglIdx]) {
-           tglDate = (row[tglIdx] instanceof Date) ? row[tglIdx] : new Date(row[tglIdx]);
-        }
+        // Prioritize Sheet Name for the month to avoid leakage between months!
+        let tglDate = sheetDateFallback;
         
-        if ((!tglDate || isNaN(tglDate.getTime())) && sheetMonth !== -1 && sheetYear !== -1) {
-            tglDate = new Date(sheetYear, sheetMonth, 1);
+        // Fallback per row jika Sheet Name tidak mengandung nama bulan
+        if (!tglDate || isNaN(tglDate.getTime())) {
+            tglDate = tglIdx !== -1 ? parseIndoDate(row[tglIdx]) : null;
+            if ((!tglDate || isNaN(tglDate.getTime())) && fallbackTglIdx !== -1) {
+                tglDate = parseIndoDate(row[fallbackTglIdx]);
+            }
         }
-        
+
         if (!tglDate || isNaN(tglDate.getTime())) return;
 
         if (year && year !== 'all') {
@@ -5775,40 +5835,49 @@ function getRekapMagangReport(year) {
 
         const month = tglDate.getMonth();
 
-        // Tentukan kategori (Fuzzy Logic)
         let kat = null;
         if (jenisIdx !== -1 && row[jenisIdx]) {
             const rawJenis = row[jenisIdx].toString().trim().toUpperCase();
             if (rawJenis.includes('KKN')) kat = 'KKN Profesi';
-            else if (rawJenis.includes('PKL') || rawJenis.includes('PRAKTEK') || rawJenis.includes('KERJA LAPANGAN')) kat = 'PKL';
+            else if (rawJenis.includes('PKL') || rawJenis.includes('PRAKTEK') || rawJenis.includes('KERJA LAPANGAN') || rawJenis.includes('PRAKERIN')) kat = 'PKL';
             else if (rawJenis.includes('PENELITIAN') || rawJenis.includes('RISET')) kat = 'Penelitian';
-            else if (rawJenis.includes('MAGANG')) kat = 'Magang';
+            else if (rawJenis.includes('MAGANG') || rawJenis.includes('MKPK')) kat = 'Magang';
         }
         
-        if (!kat) {
-            const rowStr = row.join(' ').toUpperCase();
-            if (rowStr.includes('KKN')) kat = 'KKN Profesi';
-            else if (rowStr.includes('PKL') || rowStr.includes('PRAKTEK') || rowStr.includes('KERJA LAPANGAN')) kat = 'PKL';
-            else if (rowStr.includes('PENELITIAN') || rowStr.includes('RISET')) kat = 'Penelitian';
-            else if (rowStr.includes('MAGANG')) kat = 'Magang';
-        }
-        
-        if (!kat) {
-            const sn = sheetName.toUpperCase();
-            if (sn.includes('KKN')) kat = 'KKN Profesi';
-            else if (sn.includes('PKL')) kat = 'PKL';
-            else if (sn.includes('PENELITIAN')) kat = 'Penelitian';
-            else if (sn.includes('MAGANG')) kat = 'Magang';
-        }
-        
-        if (!kat) kat = 'Magang';
+        if (!kat) kat = 'Magang'; // Fallback
         if (!result[kat]) return;
 
-        const rawStatus = statusIdx !== -1 && row[statusIdx] ? row[statusIdx].toString().trim().toLowerCase() : '';
-        result[kat][month].tawaran++;
+        result[kat][month].peserta++;
 
-        const isAccepted = acceptedStatuses.some(status => rawStatus.includes(status));
-        if (isAccepted) {
+        const rawStatus = statusIdx !== -1 && row[statusIdx] ? row[statusIdx].toString().trim().toLowerCase() : '';
+        
+        // SM (Tawaran): Hitung berdasarkan Surat Masuk (Nomor Surat Unik) per bulan
+        let nomorSurat = nomorSuratIdx !== -1 && row[nomorSuratIdx] ? row[nomorSuratIdx].toString().trim() : '';
+        
+        // Jika tidak ada nomor surat, kita anggap sebagai surat individual agar tetap terhitung
+        if (!nomorSurat) {
+             nomorSurat = 'INDIVIDU_' + Math.random().toString(36).substr(2, 9);
+        }
+
+        if (!seenLetters[kat][month][nomorSurat]) {
+             seenLetters[kat][month][nomorSurat] = true;
+             result[kat][month].tawaran++;
+        }
+
+        // CANCEL (Ditolak): Menggunakan .includes
+        const isDitolak = rawStatus.includes('ditolak') || rawStatus.includes('cancel') || rawStatus.includes('batal');
+        
+        // SACC (Diterima): Status aktif/diteruskan/selesai
+        const isDiterima = rawStatus.includes('sudah diteruskan') || 
+                           rawStatus.includes('diterima') || 
+                           rawStatus.includes('aktif') || 
+                           rawStatus.includes('sedang magang') || 
+                           rawStatus.includes('selesai') || 
+                           rawStatus.includes('lulus');
+        
+        if (isDitolak) {
+          result[kat][month].ditolak++;
+        } else if (isDiterima) {
           result[kat][month].diterima++;
         }
       });
@@ -5817,29 +5886,43 @@ function getRekapMagangReport(year) {
     const summary = {};
     let grandTotalTawaran = 0;
     let grandTotalDiterima = 0;
+    let grandTotalDitolak = 0;
+    let grandTotalPeserta = 0;
 
     KATEGORI.forEach(k => {
-      let catTawaran = 0, catDiterima = 0;
+      let catTawaran = 0, catDiterima = 0, catDitolak = 0, catPeserta = 0;
       for (let m = 0; m < 12; m++) {
         catTawaran += result[k][m].tawaran;
         catDiterima += result[k][m].diterima;
+        catDitolak += result[k][m].ditolak;
+        catPeserta += result[k][m].peserta || 0;
       }
       summary[k] = {
         totalTawaran: catTawaran,
         totalDiterima: catDiterima,
-        rate: catTawaran > 0 ? Math.round((catDiterima / catTawaran) * 100) : 0
+        totalDitolak: catDitolak,
+        totalPeserta: catPeserta,
+        rate: catPeserta > 0 ? Math.min(Math.round((catDiterima / catPeserta) * 100), 100) : (catTawaran > 0 ? Math.min(Math.round((catDiterima / catTawaran) * 100), 100) : 0)
       };
       grandTotalTawaran += catTawaran;
       grandTotalDiterima += catDiterima;
+      grandTotalDitolak += catDitolak;
+      grandTotalPeserta += catPeserta;
     });
 
-    const grandRate = grandTotalTawaran > 0 ? Math.round((grandTotalDiterima / grandTotalTawaran) * 100) : 0;
+    const grandRate = grandTotalPeserta > 0 ? Math.min(Math.round((grandTotalDiterima / grandTotalPeserta) * 100), 100) : (grandTotalTawaran > 0 ? Math.min(Math.round((grandTotalDiterima / grandTotalTawaran) * 100), 100) : 0);
 
     return {
       success: true,
       data: result,
       summary: summary,
-      grandTotal: { totalTawaran: grandTotalTawaran, totalDiterima: grandTotalDiterima, rate: grandRate },
+      grandTotal: { 
+        totalTawaran: grandTotalTawaran, 
+        totalDiterima: grandTotalDiterima, 
+        totalDitolak: grandTotalDitolak,
+        totalPeserta: grandTotalPeserta,
+        rate: grandRate 
+      },
       bulan: BULAN,
       kategori: KATEGORI,
       year: year || 'all'
